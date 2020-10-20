@@ -1,0 +1,276 @@
+# Coding: utf8
+# Some methods in preprocess.
+
+#preprocess
+
+def get_ref_file(r_filename, s_filename, flag1, flag2):
+    # Get needed ref
+    r_f = open(r_filename, "r", encoding="utf8")
+    w_f = open(s_filename, "w", encoding="utf8")
+    line = r_f.readline()
+    while line:
+        if line.find(flag1) != -1:
+            line = r_f.readline()
+            while line and line.find(flag2) == -1:
+                w_f.write(line)
+                line = r_f.readline()
+            break
+        line = r_f.readline()
+    r_f.close()
+    w_f.close()
+
+
+def get_cri_pos(filename):
+    c_pos = []
+    f = open(filename, "r", encoding="utf8")
+    temp_list = f.readline().split(":")
+    for info in temp_list:
+        c_pos.append(info.split(",")[2])
+    return c_pos
+
+
+def get_signature_prob(filename, sig_num):
+    # Read signature information.
+    base_pairs = []
+    sig_f = open(filename, "r", encoding="utf8")
+    sig_f.readline()
+    line = sig_f.readline()
+    while line:
+        line_list = str(line).split("\t")
+        prob_list = []
+        for sig_no in range(sig_num):
+            prob_list.append(float(line_list[sig_no + 3]))
+        prob = max(prob_list)
+        base_a = line_list[1]
+        base_b = line_list[2][0] + line_list[2][4] + line_list[2][6]
+        base_pairs.append((base_a, base_b, prob))
+        line = sig_f.readline()
+    return base_pairs
+
+
+def get_ref_data(filename):
+    ref = ""
+    ref_f = open(filename, "r", encoding="utf8")
+    line = ref_f.readline().replace("\n", "")
+    while line:
+        ref += line
+        line = ref_f.readline().replace("\n", "")
+    ref_f.close()
+    return ref
+
+
+def read_ref(ref, start_pos, end_pos):
+    # Read base points in reference file.
+    start_pos -= 1  # Start from index 1 actually.
+    end_pos -= 1  # Ditto.
+    return ref[start_pos: end_pos].upper()
+
+
+def extract_ATCG(sam_filename, save_filename, cri_list, base_pairs, ref, ignore_line=26, base_length=75):
+    # Read .sam file
+    sam_file = open(sam_filename, "r", encoding="utf8")
+    save_file = open(save_filename, "w", encoding="utf8")
+    for l in range(ignore_line):
+        sam_file.readline()
+    line = sam_file.readline()
+    while line:
+        # Get information
+        line_list = str(line).split("\t")
+        base_column = line_list[9].upper()
+        base_len = len(base_column)
+        if base_len == base_length:
+            sam_pos_1 = int(line_list[3])
+            sam_pos_2 = sam_pos_1 + base_len
+            # Extract the ATCG base column
+            temp_result = []
+            for base_point in base_column:
+                if base_point == "A":
+                    temp_result.append(1)
+                elif base_point == "T":
+                    temp_result.append(2)
+                elif base_point == "C":
+                    temp_result.append(3)
+                elif base_point == "G":
+                    temp_result.append(4)
+                else:
+                    temp_result.append(0)
+            # Add labels
+            label = 0
+            for pos in cri_list:
+                if sam_pos_1 <= int(pos) < sam_pos_2:
+                    label = 1
+                    break
+            # Add signature
+            prob = add_signature(base_column, ref, base_pairs, sam_pos_1, sam_pos_2)
+            # Save results
+            save_file.write(str(temp_result) + "\t" + str(prob) + "\t" + str(label) + "\n")
+        line = sam_file.readline()
+    sam_file.close()
+    save_file.close()
+
+
+def add_signature(base, ref, sig_pairs, pos_1, pos_2):
+    prob = 0
+    base_ref = read_ref(ref, pos_1, pos_2)
+    for sig in sig_pairs:
+        ft_pos = base.find(sig[1])
+        if ft_pos != -1 and base_ref[ft_pos: ft_pos + len(sig[0])] == sig[0] and sig[2] > prob:
+            prob = sig[2]
+    return prob
+
+
+def downsampling(sam_filename, save_filename, sample_sum):
+    # Balance 0/1 samples
+    gap = sample_sum / 100
+    add_sum = 0
+    sam_f = open(sam_filename, "r", encoding="utf8")
+    save_f = open(save_filename, "w", encoding="utf8")
+    line = sam_f.readline().replace("\n", "")
+    while line:
+        line_list = str(line).split("\t")
+        base_column = line_list[0]
+        label = line_list[1]
+        if label == "1" and add_sum <= gap:
+            save_f.write(str(base_column) + "\t" + str(label) + "\n")
+            add_sum += 1
+            sample_sum -= 1
+        elif label == "0" and add_sum >= -gap:
+            save_f.write(str(base_column) + "\t" + str(label) + "\n")
+            add_sum -= 1
+            sample_sum -= 1
+        if sample_sum < 0:
+            break
+        line = sam_f.readline().replace("\n", "")
+    sam_f.close()
+    save_f.close()
+
+
+if __name__ == "__main__":
+    # get_ref_file("data/source/hg19.fa", "data/source/ref.fa", "chr21", "chr22")
+    cri_pos_list = get_cri_pos("data/source/criteria.txt")
+    base_pairs = get_signature_prob("data/source/signatures_probabilities.txt", 30)
+    ref_data = get_ref_data("data/source/ref.fa")
+    # ref_base = read_ref(ref_data, 34643822, 34643822 + 75)
+    # length = len(ref_base)
+    extract_ATCG("data/source/m.sam", "data/processed/m_pro.sam", cri_pos_list, base_pairs, ref_data)
+    # downsampling("101.sam.txt", 5000)
+
+
+
+#encoding
+ Coding: utf8
+# Check base columns' class by TextCNN
+# NO.3
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.utils.data as Data
+
+dtype = torch.FloatTensor
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# --- Parameter --- #
+# Data Parameter
+train_filename = "100.sam.txt"
+test_filename = "101.sam.txt"
+# TextCNN Parameter
+embedding_size = 20
+kernel_size = [2, 3, 4]
+output_channel = 2
+num_classes = 2
+# Train&Test Parameter
+training_times = 5000
+test_num = 10000
+
+
+# --- Parameter --- #
+
+def read_file(filename):
+    # Read data from specific files
+    samples = []
+    labels = []
+    read_f = open(filename, "r", encoding="utf8")
+    line = read_f.readline()
+    while line:
+        line_list = str(line).split("\t")
+        matrix = eval(line_list[0])
+        # 2D => 1D
+        vec = []
+        for i in range(len(matrix[0])):
+            if matrix[0][i] == 1:
+                vec.append(1)
+            elif matrix[1][i] == 1:
+                vec.append(2)
+            elif matrix[2][i] == 1:
+                vec.append(3)
+            elif matrix[3][i] == 1:
+                vec.append(4)
+        samples.append(vec)
+        labels.append(eval(line_list[1]))
+        line = read_f.readline()
+    return samples, labels
+
+
+input_batch, target_batch = read_file(train_filename)
+test_samples, test_labels = read_file(test_filename)
+batch_size = len(input_batch)
+in_channel = len(input_batch[0])
+input_batch, target_batch = torch.LongTensor(input_batch), torch.LongTensor(target_batch)
+
+dataset = Data.TensorDataset(input_batch, target_batch)
+loader = Data.DataLoader(dataset, batch_size, True)
+
+
+class TextCNN(nn.Module):
+    def __init__(self):
+        super(TextCNN, self).__init__()
+        self.embedding = nn.Embedding(num_embeddings=5,
+                                      embedding_dim=embedding_size)
+        self.convs = nn.ModuleList([
+            nn.Sequential(nn.Conv1d(in_channels=in_channel,
+                                    out_channels=output_channel,
+                                    kernel_size=h,
+                                    stride=1),
+                          nn.ReLU(),
+                          nn.MaxPool1d(kernel_size=embedding_size - h + 1))
+            for h in kernel_size
+        ])
+        self.fc = nn.Linear(output_channel * len(kernel_size), num_classes)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        out = [conv(x) for conv in self.convs]
+        out = torch.cat(out, dim=1)
+        out = out.view(-1, out.size(1))
+        out = self.fc(out)
+        return out
+
+
+model = TextCNN().to(device)
+criterion = nn.CrossEntropyLoss().to(device)
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+# Train
+for epoch in range(training_times):
+    for batch_x, batch_y in loader:
+        batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+        pred = model(batch_x.long())
+        loss = criterion(pred, batch_y)
+        if (epoch + 1) % (training_times / 10) == 0:
+            print('Epoch:', '%04d' % (epoch + 1), 'loss =', '{:.6f}'.format(loss))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+# Test
+right_num = 0
+for i in range(test_num):
+    test = torch.LongTensor(test_samples[i]).to(device).unsqueeze(0)
+    # Predict
+    model = model.eval()
+    predict = model(test.long()).data.max(1, keepdim=True)[1]
+    if predict[0][0] == test_labels[i]:
+        right_num += 1
+print(right_num / test_num)
